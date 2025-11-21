@@ -1,0 +1,17 @@
+.venv/
+# Ignore virtual environments
+.venv/
+venv/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore local logs and temporary files
+*.log
+
+# Optional: ignore usage log if you don't want it in repo
+usage_log.csv
+
+# Ignore large zip/archives if you don't want them in repo
+*.zip
