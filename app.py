@@ -7,6 +7,7 @@ import json
 from datetime import datetime
 
 import matplotlib.pyplot as plt  # for confusion matrix & curves
+from sklearn.metrics import ConfusionMatrixDisplay
 
 # -----------------------------
 # Page config
@@ -324,14 +325,19 @@ It is **not approved for clinical use** and must not be used as a substitute
 for professional medical advice, diagnosis, or treatment.
 """)
 
+
 # ======================================================
 # TAB 3: Usage Stats
 # ======================================================
 with tab_stats:
-    st.header("📈 Usage Statistics (Local)")
+    st.header("📈 Usage Statistics & Model Performance")
 
+    # -------------------------
+    # A. Local usage analytics
+    # -------------------------
     log_file = "usage_log.csv"
 
+    st.subheader("App Usage (Local Only)")
     if not os.path.exists(log_file):
         st.info(
             "No usage data found yet. Make some predictions in the "
@@ -340,20 +346,28 @@ with tab_stats:
     else:
         df_log = pd.read_csv(log_file)
 
-        st.write(f"Total predictions made: **{len(df_log)}**")
-
-        # Average probability
+        # Top-level numbers
+        total_preds = len(df_log)
         avg_prob = df_log["probability"].mean()
-        st.write(f"Average predicted diabetes probability: **{avg_prob:.2f}**")
 
-        # Count by risk level
-        st.subheader("Risk Level Distribution")
-        risk_counts = df_log["risk_level"].value_counts().reindex(["Low", "Medium", "High"]).fillna(0)
+        col_a1, col_a2 = st.columns(2)
+        with col_a1:
+            st.metric("Total Predictions", total_preds)
+        with col_a2:
+            st.metric("Avg. Predicted Diabetes Probability", f"{avg_prob:.2f}")
 
+        # Risk level distribution
+        st.markdown("#### Risk Level Distribution")
+        risk_counts = (
+            df_log["risk_level"]
+            .value_counts()
+            .reindex(["Low", "Medium", "High"])
+            .fillna(0)
+        )
         st.bar_chart(risk_counts)
 
-        # Show recent logs
-        st.subheader("Recent Predictions (Last 10)")
+        # Recent logs
+        st.markdown("#### Recent Predictions (Last 10)")
         st.dataframe(df_log.tail(10))
         st.caption("Data is stored locally in 'usage_log.csv' and does not contain names or IDs.")
 
@@ -366,7 +380,101 @@ with tab_stats:
             mime="text/csv",
         )
 
-    # --- Feature importance block ---
+    st.markdown("---")
+
+    # -------------------------
+    # B. Model performance section
+    # -------------------------
+    st.subheader("Model Performance (Test Set)")
+    metrics_file = "model_metrics.json"
+
+    if os.path.exists(metrics_file):
+        with open(metrics_file, "r") as f:
+            metrics = json.load(f)
+
+        # Top metrics in columns
+        col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+        with col_m1:
+            st.metric("Best Model", metrics["best_model"])
+        with col_m2:
+            st.metric("Accuracy", f"{metrics['accuracy']:.2f}")
+        with col_m3:
+            st.metric("Recall", f"{metrics['recall']:.2f}")
+        with col_m4:
+            st.metric("Precision", f"{metrics['precision']:.2f}")
+        with col_m5:
+            st.metric("F1-score", f"{metrics['f1']:.2f}")
+
+        # ---- Confusion Matrix ----
+        cm = metrics.get("confusion_matrix", None)
+        if cm is not None:
+            st.markdown("### Confusion Matrix")
+
+            cm_array = np.array(cm)
+
+            fig_cm, ax_cm = plt.subplots()
+            disp = ConfusionMatrixDisplay(
+                confusion_matrix=cm_array,
+                display_labels=["No Diabetes (0)", "Diabetes (1)"],
+            )
+            disp.plot(ax=ax_cm, values_format="d", colorbar=False)
+            ax_cm.set_xlabel("Predicted label")
+            ax_cm.set_ylabel("True label")
+            st.pyplot(fig_cm)
+
+        # Put ROC & PR curves side-by-side if both exist
+        roc_curve_data = metrics.get("roc_curve", None)
+        pr_curve_data = metrics.get("pr_curve", None)
+
+        if roc_curve_data or pr_curve_data:
+            st.markdown("### Evaluation Curves")
+            col_c1, col_c2 = st.columns(2)
+
+            # ---- ROC Curve ----
+            if roc_curve_data is not None:
+                with col_c1:
+                    st.markdown("#### ROC Curve")
+                    fpr = roc_curve_data.get("fpr", [])
+                    tpr = roc_curve_data.get("tpr", [])
+
+                    if len(fpr) > 0 and len(tpr) > 0:
+                        fig_roc, ax_roc = plt.subplots()
+                        ax_roc.plot(fpr, tpr, label="ROC curve")
+                        ax_roc.plot([0, 1], [0, 1], linestyle="--")
+                        ax_roc.set_xlabel("False Positive Rate")
+                        ax_roc.set_ylabel("True Positive Rate")
+                        ax_roc.set_title("Receiver Operating Characteristic")
+                        st.pyplot(fig_roc)
+                    else:
+                        st.info("ROC data is empty.")
+
+            # ---- Precision–Recall Curve ----
+            if pr_curve_data is not None:
+                with col_c2:
+                    st.markdown("#### Precision–Recall Curve")
+                    precision_vals = pr_curve_data.get("precision", [])
+                    recall_vals = pr_curve_data.get("recall", [])
+
+                    if len(precision_vals) > 0 and len(recall_vals) > 0:
+                        fig_pr, ax_pr = plt.subplots()
+                        ax_pr.plot(recall_vals, precision_vals)
+                        ax_pr.set_xlabel("Recall")
+                        ax_pr.set_ylabel("Precision")
+                        ax_pr.set_title("Precision–Recall Curve")
+                        st.pyplot(fig_pr)
+                    else:
+                        st.info("Precision–Recall data is empty.")
+    else:
+        st.info(
+            "Model performance summary not found. Run `train_model.py` "
+            "to generate model_metrics.json (and plots data)."
+        )
+
+    st.markdown("---")
+
+    # -------------------------
+    # C. Feature importance block
+    # -------------------------
     st.subheader("Feature Importance (if available)")
 
     if os.path.exists("feature_importances.csv"):
@@ -375,75 +483,6 @@ with tab_stats:
         st.bar_chart(fi_df.set_index("feature")["importance"])
     else:
         st.info(
-            "Feature importance is only available when the Random Forest model is selected "
-            "as the best model during training."
+            "Feature importance is only available when the Random Forest model "
+            "is selected as the best model during training."
         )
-
-    # --- Model metrics block ---
-    st.subheader("Model Performance (Test Set)")
-    metrics_file = "model_metrics.json"
-    if os.path.exists(metrics_file):
-        with open(metrics_file, "r") as f:
-            metrics = json.load(f)
-
-        st.write(f"- Best model: **{metrics['best_model']}**")
-        st.write(f"- Accuracy: **{metrics['accuracy']:.2f}**")
-        st.write(f"- Recall: **{metrics['recall']:.2f}**")
-        st.write(f"- Precision: **{metrics['precision']:.2f}**")
-        st.write(f"- F1-score: **{metrics['f1']:.2f}**")
-
-        # --- Confusion Matrix (if available) ---
-        cm = metrics.get("confusion_matrix", None)
-        if cm is not None:
-            st.subheader("Confusion Matrix")
-            cm_array = np.array(cm)
-
-            fig, ax = plt.subplots()
-            im = ax.imshow(cm_array, interpolation="nearest")
-            ax.set_xticks([0, 1])
-            ax.set_yticks([0, 1])
-            ax.set_xticklabels(["Predicted 0", "Predicted 1"])
-            ax.set_yticklabels(["Actual 0", "Actual 1"])
-            ax.set_xlabel("Predicted label")
-            ax.set_ylabel("True label")
-
-            # Annotate cells
-            for i in range(cm_array.shape[0]):
-                for j in range(cm_array.shape[1]):
-                    ax.text(j, i, cm_array[i, j], ha="center", va="center")
-
-            st.pyplot(fig)
-
-        # --- ROC Curve (if available) ---
-        roc_curve_data = metrics.get("roc_curve", None)
-        if roc_curve_data is not None:
-            st.subheader("ROC Curve")
-            fpr = roc_curve_data.get("fpr", [])
-            tpr = roc_curve_data.get("tpr", [])
-
-            if len(fpr) > 0 and len(tpr) > 0:
-                fig_roc, ax_roc = plt.subplots()
-                ax_roc.plot(fpr, tpr, label="ROC curve")
-                ax_roc.plot([0, 1], [0, 1], linestyle="--")
-                ax_roc.set_xlabel("False Positive Rate")
-                ax_roc.set_ylabel("True Positive Rate")
-                ax_roc.set_title("Receiver Operating Characteristic")
-                st.pyplot(fig_roc)
-
-        # --- Precision-Recall Curve (if available) ---
-        pr_curve_data = metrics.get("pr_curve", None)
-        if pr_curve_data is not None:
-            st.subheader("Precision–Recall Curve")
-            precision = pr_curve_data.get("precision", [])
-            recall = pr_curve_data.get("recall", [])
-
-            if len(precision) > 0 and len(recall) > 0:
-                fig_pr, ax_pr = plt.subplots()
-                ax_pr.plot(recall, precision)
-                ax_pr.set_xlabel("Recall")
-                ax_pr.set_ylabel("Precision")
-                ax_pr.set_title("Precision–Recall Curve")
-                st.pyplot(fig_pr)
-
-    else:
-        st.info("Model performance summary not found. Run `train_model.py` to generate it.")
