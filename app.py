@@ -3,7 +3,10 @@ import numpy as np
 import pickle
 import pandas as pd
 import os
+import json
 from datetime import datetime
+
+import matplotlib.pyplot as plt  # for confusion matrix & curves
 
 # -----------------------------
 # Page config
@@ -15,6 +18,12 @@ st.set_page_config(
 )
 
 # -----------------------------
+# Session state for reset
+# -----------------------------
+if "reset_key" not in st.session_state:
+    st.session_state["reset_key"] = 0
+
+# -----------------------------
 # Load trained model
 # -----------------------------
 with open("diabetes_model.pkl", "rb") as f:
@@ -23,6 +32,10 @@ with open("diabetes_model.pkl", "rb") as f:
 model = model_artifact["model"]
 scaler = model_artifact["scaler"]
 feature_names = model_artifact["feature_names"]
+
+# new fields for upgraded training script (with defaults for backward-compat)
+uses_scaled_input = model_artifact.get("uses_scaled_input", True)
+model_name = model_artifact.get("model_name", "Logistic Regression")
 
 # -----------------------------
 # App title
@@ -50,16 +63,41 @@ with tab_predict:
     st.sidebar.header("Input Health Parameters")
 
     def user_input_features():
-        Pregnancies = st.sidebar.number_input("Pregnancies", min_value=0, max_value=20, value=1)
-        Glucose = st.sidebar.number_input("Glucose (mg/dL)", min_value=0, max_value=300, value=120)
-        BloodPressure = st.sidebar.number_input("Blood Pressure (mm Hg)", min_value=0, max_value=200, value=70)
-        SkinThickness = st.sidebar.number_input("Skin Thickness (mm)", min_value=0, max_value=100, value=20)
-        Insulin = st.sidebar.number_input("Insulin (mu U/ml)", min_value=0, max_value=900, value=80)
-        BMI = st.sidebar.number_input("BMI (kg/m²)", min_value=0.0, max_value=70.0, value=25.0, step=0.1)
-        DiabetesPedigreeFunction = st.sidebar.number_input(
-            "Diabetes Pedigree Function", min_value=0.0, max_value=3.0, value=0.5, step=0.01
+        """
+        Use reset_key in widget keys so that when it changes,
+        Streamlit recreates the inputs with default values.
+        """
+        key_suffix = st.session_state["reset_key"]
+
+        Pregnancies = st.sidebar.number_input(
+            "Pregnancies", min_value=0, max_value=20, value=1, key=f"preg_{key_suffix}"
         )
-        Age = st.sidebar.number_input("Age (years)", min_value=1, max_value=120, value=30)
+        Glucose = st.sidebar.number_input(
+            "Glucose (mg/dL)", min_value=0, max_value=300, value=120, key=f"glu_{key_suffix}"
+        )
+        BloodPressure = st.sidebar.number_input(
+            "Blood Pressure (mm Hg)", min_value=0, max_value=200, value=70, key=f"bp_{key_suffix}"
+        )
+        SkinThickness = st.sidebar.number_input(
+            "Skin Thickness (mm)", min_value=0, max_value=100, value=20, key=f"skin_{key_suffix}"
+        )
+        Insulin = st.sidebar.number_input(
+            "Insulin (mu U/ml)", min_value=0, max_value=900, value=80, key=f"ins_{key_suffix}"
+        )
+        BMI = st.sidebar.number_input(
+            "BMI (kg/m²)", min_value=0.0, max_value=70.0, value=25.0, step=0.1, key=f"bmi_{key_suffix}"
+        )
+        DiabetesPedigreeFunction = st.sidebar.number_input(
+            "Diabetes Pedigree Function",
+            min_value=0.0,
+            max_value=3.0,
+            value=0.5,
+            step=0.01,
+            key=f"dpf_{key_suffix}"
+        )
+        Age = st.sidebar.number_input(
+            "Age (years)", min_value=1, max_value=120, value=30, key=f"age_{key_suffix}"
+        )
 
         data = np.array([
             Pregnancies,
@@ -105,12 +143,38 @@ with tab_predict:
 
     st.markdown("---")
 
-    # Prediction button
-    if st.button("Predict Risk"):
-        # scale input using the same scaler
-        scaled_input = scaler.transform(input_data)
-        prediction = model.predict(scaled_input)[0]
-        prediction_proba = model.predict_proba(scaled_input)[0][1]  # probability of diabetes (class 1)
+    col1, col2 = st.columns(2)
+
+    with col1:
+        predict_clicked = st.button("Predict Risk")
+    with col2:
+        reset_clicked = st.button("Reset Inputs")
+
+    # Reset button logic
+    if reset_clicked:
+        st.session_state["reset_key"] += 1
+        st.rerun()
+
+    # Prediction button logic
+    if predict_clicked:
+        # Decide whether to scale input based on the saved model package
+        if uses_scaled_input:
+            model_input = scaler.transform(input_data)
+        else:
+            model_input = input_data
+
+        # Optional: wrap in DataFrame for models trained with feature names (Random Forest)
+        if not uses_scaled_input:
+            model_input = pd.DataFrame(model_input, columns=feature_names)
+
+        prediction = model.predict(model_input)[0]
+
+        # probability of diabetes (class 1) if available
+        if hasattr(model, "predict_proba"):
+            prediction_proba = float(model.predict_proba(model_input)[0][1])
+        else:
+            # fallback: use 0/1 prediction as a rough probability
+            prediction_proba = float(prediction)
 
         # Determine risk level from probability
         if prediction_proba < 0.3:
@@ -124,6 +188,7 @@ with tab_predict:
             msg = "High estimated risk. Please consider consulting a healthcare professional."
 
         st.subheader("Prediction Result")
+        st.caption(f"Model used: **{model_name}**")
 
         if prediction == 1:
             st.error(
@@ -139,14 +204,35 @@ with tab_predict:
         st.write(f"**Risk level:** {risk_level}")
         st.info(msg)
 
-        # General health tips (non-medical)
-        st.markdown("### 💡 General Health Tips (Non-medical)")
+        # Risk-specific advice
+        st.markdown("### 🩺 Educational Health Guidance (Non-medical)")
+
+        if risk_level == "High":
+            st.warning("""
+- Please consider visiting a health facility for proper diabetes screening.  
+- Discuss your results with a qualified healthcare professional.  
+- Focus on reducing sugary foods and increasing physical activity.  
+            """)
+        elif risk_level == "Medium":
+            st.info("""
+- You may benefit from lifestyle changes such as more exercise and a healthier diet.  
+- Try to monitor your blood pressure, weight, and blood sugar where possible.  
+- Consider regular check-ups, especially if you have a family history of diabetes.  
+            """)
+        else:  # Low
+            st.success("""
+- Keep up your healthy habits!  
+- Maintain a balanced diet and regular physical activity.  
+- Continue going for periodic health check-ups.  
+            """)
+
+        st.markdown("#### 💡 General Health Tips")
         st.write("""
-- Try to maintain a balanced diet with vegetables, fruits, and whole grains.  
-- Aim for regular physical activity (e.g., walking, light exercise).  
+- Eat more vegetables, fruits, and whole grains.  
+- Aim for at least **150 minutes of moderate exercise per week** (e.g., brisk walking).  
 - Limit sugary drinks and highly processed foods.  
-- Avoid smoking and excessive alcohol.  
-- Go for regular health check-ups if possible.
+- Avoid smoking and reduce alcohol intake.  
+- If you have a family history of diabetes or other risk factors, get regular health screenings.
         """)
         st.caption("These are general tips, not personalized medical advice.")
 
@@ -182,7 +268,6 @@ with tab_predict:
 Always consult a qualified healthcare professional for medical advice.
 """)
 
-
 # ======================================================
 # TAB 2: About & SDG 3
 # ======================================================
@@ -192,7 +277,7 @@ with tab_about:
     st.markdown("""
 ### 🎯 Project Overview
 This project implements a simple **Diabetes Risk Predictor** using a
-Logistic Regression model trained on the public **Pima Indians Diabetes Dataset**.
+machine learning model trained on the public **Pima Indians Diabetes Dataset**.
 
 The app estimates the probability that a person might have diabetes based on:
 - Age  
@@ -220,10 +305,10 @@ It is not meant to replace doctors but to show how **data and AI** can assist
 public health and preventive care.
 """)
 
-    st.markdown("""
+    st.markdown(f"""
 ### 🧠 Model Information
 
-- **Algorithm:** Logistic Regression  
+- **Selected algorithm:** {model_name}  
 - **Input features:** 8 numerical health parameters  
 - **Output:** Probability of diabetes (0 to 1) and a binary prediction (Yes/No)  
 
@@ -238,7 +323,6 @@ This application is **for educational and demonstration purposes only**.
 It is **not approved for clinical use** and must not be used as a substitute
 for professional medical advice, diagnosis, or treatment.
 """)
-
 
 # ======================================================
 # TAB 3: Usage Stats
@@ -272,3 +356,94 @@ with tab_stats:
         st.subheader("Recent Predictions (Last 10)")
         st.dataframe(df_log.tail(10))
         st.caption("Data is stored locally in 'usage_log.csv' and does not contain names or IDs.")
+
+        # Optional: allow export of CSV
+        csv_bytes = df_log.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download Usage Log as CSV",
+            data=csv_bytes,
+            file_name="usage_log.csv",
+            mime="text/csv",
+        )
+
+    # --- Feature importance block ---
+    st.subheader("Feature Importance (if available)")
+
+    if os.path.exists("feature_importances.csv"):
+        fi_df = pd.read_csv("feature_importances.csv")
+        st.write("The chart below shows which features contributed most in the Random Forest model:")
+        st.bar_chart(fi_df.set_index("feature")["importance"])
+    else:
+        st.info(
+            "Feature importance is only available when the Random Forest model is selected "
+            "as the best model during training."
+        )
+
+    # --- Model metrics block ---
+    st.subheader("Model Performance (Test Set)")
+    metrics_file = "model_metrics.json"
+    if os.path.exists(metrics_file):
+        with open(metrics_file, "r") as f:
+            metrics = json.load(f)
+
+        st.write(f"- Best model: **{metrics['best_model']}**")
+        st.write(f"- Accuracy: **{metrics['accuracy']:.2f}**")
+        st.write(f"- Recall: **{metrics['recall']:.2f}**")
+        st.write(f"- Precision: **{metrics['precision']:.2f}**")
+        st.write(f"- F1-score: **{metrics['f1']:.2f}**")
+
+        # --- Confusion Matrix (if available) ---
+        cm = metrics.get("confusion_matrix", None)
+        if cm is not None:
+            st.subheader("Confusion Matrix")
+            cm_array = np.array(cm)
+
+            fig, ax = plt.subplots()
+            im = ax.imshow(cm_array, interpolation="nearest")
+            ax.set_xticks([0, 1])
+            ax.set_yticks([0, 1])
+            ax.set_xticklabels(["Predicted 0", "Predicted 1"])
+            ax.set_yticklabels(["Actual 0", "Actual 1"])
+            ax.set_xlabel("Predicted label")
+            ax.set_ylabel("True label")
+
+            # Annotate cells
+            for i in range(cm_array.shape[0]):
+                for j in range(cm_array.shape[1]):
+                    ax.text(j, i, cm_array[i, j], ha="center", va="center")
+
+            st.pyplot(fig)
+
+        # --- ROC Curve (if available) ---
+        roc_curve_data = metrics.get("roc_curve", None)
+        if roc_curve_data is not None:
+            st.subheader("ROC Curve")
+            fpr = roc_curve_data.get("fpr", [])
+            tpr = roc_curve_data.get("tpr", [])
+
+            if len(fpr) > 0 and len(tpr) > 0:
+                fig_roc, ax_roc = plt.subplots()
+                ax_roc.plot(fpr, tpr, label="ROC curve")
+                ax_roc.plot([0, 1], [0, 1], linestyle="--")
+                ax_roc.set_xlabel("False Positive Rate")
+                ax_roc.set_ylabel("True Positive Rate")
+                ax_roc.set_title("Receiver Operating Characteristic")
+                st.pyplot(fig_roc)
+
+        # --- Precision-Recall Curve (if available) ---
+        pr_curve_data = metrics.get("pr_curve", None)
+        if pr_curve_data is not None:
+            st.subheader("Precision–Recall Curve")
+            precision = pr_curve_data.get("precision", [])
+            recall = pr_curve_data.get("recall", [])
+
+            if len(precision) > 0 and len(recall) > 0:
+                fig_pr, ax_pr = plt.subplots()
+                ax_pr.plot(recall, precision)
+                ax_pr.set_xlabel("Recall")
+                ax_pr.set_ylabel("Precision")
+                ax_pr.set_title("Precision–Recall Curve")
+                st.pyplot(fig_pr)
+
+    else:
+        st.info("Model performance summary not found. Run `train_model.py` to generate it.")
