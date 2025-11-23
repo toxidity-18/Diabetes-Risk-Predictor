@@ -12,6 +12,7 @@ The app supports **Sustainable Development Goal 3 (SDG 3): Good Health & Well-be
 > It is **NOT** a medical device and must **not** be used for real diagnosis or treatment.
 
 ---
+## [PitchDeck](https://diabetes-risk-predictor-fvl7hbm.gamma.site/)
 ## 🖼️ Screenshots
 
 ### 1. Risk Prediction Tab
